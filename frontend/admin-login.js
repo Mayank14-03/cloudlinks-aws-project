@@ -15,11 +15,22 @@ if (activeSession) {
 
 loginButton.addEventListener("click", () => {
   const config = window.APP_CONFIG || {};
+
   if (!config.COGNITO_DOMAIN || !config.COGNITO_CLIENT_ID || !config.COGNITO_REDIRECT_URI) {
     setStatus("Missing Cognito config. Update frontend/config.js.");
     return;
   }
+
   setStatus("Redirecting to secure Cognito sign-in...");
-  window.location.href = window.CloudLinksAuth.getAuthorizeUrl();
+
+  const url =
+    config.COGNITO_DOMAIN +
+    "/login?client_id=" + config.COGNITO_CLIENT_ID +
+    "&response_type=code" +
+    "&scope=email+openid+profile" +
+    "&redirect_uri=" + encodeURIComponent(config.COGNITO_REDIRECT_URI);
+
+  window.location.href = url;
+});
 });
 
