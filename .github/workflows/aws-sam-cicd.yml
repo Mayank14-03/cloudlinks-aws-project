@@ -33,10 +33,10 @@ jobs:
         uses: aws-actions/setup-sam@v2
 
       - name: SAM validate
-        run: sam validate --template-file template.yaml
+        run: sam validate --template-file template.yaml --region ap-south-1
 
       - name: SAM build
-        run: sam build --template-file template.yaml --use-container
+        run: sam build --template-file template.yaml --use-container --region ap-south-1
 
   deploy:
     name: Deploy to AWS
