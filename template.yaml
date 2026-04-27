@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CloudLinks beginner AWS serverless URL shortener
+
+Parameters:
+  AdminCallbackUrl:
+    Type: String
+    Default: http://localhost:5500/admin.html
+    Description: Callback URL after Cognito login
+  AdminLogoutUrl:
+    Type: String
+    Default: http://localhost:5500/admin-login.html
+    Description: Redirect URL after Cognito logout
+  FrontendDomainName:
+    Type: String
+    Default: ""
+    Description: Optional custom domain for frontend (example app.example.com)
+  FrontendHostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route53 Hosted Zone ID for the frontend domain
+  FrontendAcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate ARN in us-east-1 for CloudFront HTTPS
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 10
+    MemorySize: 128
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        LINKS_TABLE_NAME: !Ref LinksTable
+
+Conditions:
+  UseFrontendCustomDomain: !And
+    - !Not [!Equals [!Ref FrontendDomainName, ""]]
+    - !Not [!Equals [!Ref FrontendHostedZoneId, ""]]
+    - !Not [!Equals [!Ref FrontendAcmCertificateArn, ""]]
+
+Resources:
+  CloudLinksHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowOrigins:
+          - "*"
+      Auth:
+        Authorizers:
+          AdminCognitoAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${AdminUserPool}
+              audience:
+                - !Ref AdminUserPoolClient
+            IdentitySource: "$request.header.Authorization"
+
+  CreateShortUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/functions/create_short_url/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LinksTable
+      Events:
+        CreateShortUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CloudLinksHttpApi
+            Method: POST
+            Path: /shorten
+
+  RedirectUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/functions/redirect_url/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LinksTable
+      Events:
+        RedirectUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CloudLinksHttpApi
+            Method: GET
+            Path: /{shortCode}
+
+  GetAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/functions/get_analytics/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref LinksTable
+      Events:
+        GetAnalytics:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CloudLinksHttpApi
+            Method: GET
+            Path: /admin/analytics
+            Auth:
+              Authorizer: AdminCognitoAuthorizer
+
+  AdminUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub cloudlinks-admin-pool-${AWS::StackName}
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+
+  AdminUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref AdminUserPool
+      ClientName: cloudlinks-admin-client
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - implicit
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - !Ref AdminCallbackUrl
+      LogoutURLs:
+        - !Ref AdminLogoutUrl
+
+  AdminUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub cloudlinks-${AWS::AccountId}-${AWS::Region}
+      UserPoolId: !Ref AdminUserPool
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub cloudlinks-oac-${AWS::StackName}
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub CloudLinks frontend distribution for ${AWS::StackName}
+        DefaultRootObject: index.html
+        Aliases: !If
+          - UseFrontendCustomDomain
+          - - !Ref FrontendDomainName
+          - !Ref AWS::NoValue
+        Origins:
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref FrontendOriginAccessControl
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        ViewerCertificate: !If
+          - UseFrontendCustomDomain
+          - AcmCertificateArn: !Ref FrontendAcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendCloudFrontDistribution}
+
+  FrontendDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: UseFrontendCustomDomain
+    Properties:
+      HostedZoneId: !Ref FrontendHostedZoneId
+      Name: !Ref FrontendDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt FrontendCloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  LinksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: shortCode
+          AttributeType: S
+      KeySchema:
+        - AttributeName: shortCode
+          KeyType: HASH
+
+Outputs:
+  CloudLinksApiUrl:
+    Description: Base URL of CloudLinks API
+    Value: !Sub "https://${CloudLinksHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID for admin login
+    Value: !Ref AdminUserPool
+  CognitoUserPoolClientId:
+    Description: Cognito App Client ID for admin login
+    Value: !Ref AdminUserPoolClient
+  CognitoHostedUiDomain:
+    Description: Cognito Hosted UI domain
+    Value: !Sub https://${AdminUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+  FrontendBucketName:
+    Description: S3 bucket for CloudLinks frontend assets
+    Value: !Ref FrontendBucket
+  FrontendCloudFrontDistributionId:
+    Description: CloudFront distribution ID for frontend
+    Value: !Ref FrontendCloudFrontDistribution
+  FrontendCloudFrontDomainName:
+    Description: CloudFront domain name for frontend
+    Value: !GetAtt FrontendCloudFrontDistribution.DomainName
+  FrontendUrl:
+    Description: Frontend URL (custom domain if configured, otherwise CloudFront URL)
+    Value: !If
+      - UseFrontendCustomDomain
+      - !Sub https://${FrontendDomainName}
+      - !Sub https://${FrontendCloudFrontDistribution.DomainName}
+  LinksTableName:
+    Description: DynamoDB table name for links
+    Value: !Ref LinksTable

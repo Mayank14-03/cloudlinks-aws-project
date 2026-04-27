@@ -1,0 +1,11 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /shorten",
+  "rawPath": "/shorten",
+  "requestContext": {
+    "domainName": "example.execute-api.ap-south-1.amazonaws.com",
+    "stage": "$default"
+  },
+  "body": "{\"url\":\"https://aws.amazon.com/\"}"
+}
+

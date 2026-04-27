@@ -1,0 +1,9 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /{shortCode}",
+  "rawPath": "/abc123",
+  "pathParameters": {
+    "shortCode": "abc123"
+  }
+}
+

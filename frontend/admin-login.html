@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CloudLinks Admin Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="admin-login.css" />
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="glass-card">
+        <p class="eyebrow">CloudLinks Admin</p>
+        <h1>Secure Dashboard Access</h1>
+        <p class="subtitle">Sign in with AWS Cognito to view analytics and manage admin insights.</p>
+        <button id="login-button" type="button">Sign In with Cognito</button>
+        <a class="secondary-link" href="index.html">Back to Link Creator</a>
+        <p id="login-status" class="login-status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="auth.js"></script>
+    <script src="admin-login.js"></script>
+  </body>
+</html>
+

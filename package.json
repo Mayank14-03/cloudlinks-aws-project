@@ -1,0 +1,16 @@
+{
+  "name": "build-a-beginner-aws-cloud-project",
+  "version": "1.0.0",
+  "description": "Open-source, serverless link shortener with an authenticated analytics dashboard.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}

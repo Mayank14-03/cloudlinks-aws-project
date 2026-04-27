@@ -1,0 +1,120 @@
+name: AWS SAM CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  validate:
+    name: Validate and Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: SAM validate
+        run: sam validate --template-file template.yaml
+
+      - name: SAM build
+        run: sam build --template-file template.yaml --use-container
+
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: SAM deploy
+        run: |
+          sam deploy \
+            --template-file template.yaml \
+            --stack-name "${{ vars.STACK_NAME }}" \
+            --region "${{ vars.AWS_REGION }}" \
+            --capabilities CAPABILITY_IAM \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              AdminCallbackUrl="${{ vars.ADMIN_CALLBACK_URL }}" \
+              AdminLogoutUrl="${{ vars.ADMIN_LOGOUT_URL }}" \
+              FrontendDomainName="${{ vars.FRONTEND_DOMAIN_NAME }}" \
+              FrontendHostedZoneId="${{ vars.FRONTEND_HOSTED_ZONE_ID }}" \
+              FrontendAcmCertificateArn="${{ vars.FRONTEND_ACM_CERTIFICATE_ARN }}"
+
+      - name: Resolve stack outputs
+        id: stack_outputs
+        run: |
+          STACK_NAME="${{ vars.STACK_NAME }}"
+          AWS_REGION="${{ vars.AWS_REGION }}"
+          API_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='CloudLinksApiUrl'].OutputValue" --output text)
+          COGNITO_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='CognitoHostedUiDomain'].OutputValue" --output text)
+          COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolClientId'].OutputValue" --output text)
+          FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
+          FRONTEND_DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='FrontendCloudFrontDistributionId'].OutputValue" --output text)
+
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "cognito_domain=$COGNITO_DOMAIN" >> "$GITHUB_OUTPUT"
+          echo "cognito_client_id=$COGNITO_CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "frontend_bucket=$FRONTEND_BUCKET" >> "$GITHUB_OUTPUT"
+          echo "frontend_distribution_id=$FRONTEND_DISTRIBUTION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend runtime config
+        run: |
+          cat > frontend/config.js <<EOF
+          window.APP_CONFIG = {
+            API_BASE_URL: "${{ steps.stack_outputs.outputs.api_url }}",
+            COGNITO_DOMAIN: "${{ steps.stack_outputs.outputs.cognito_domain }}",
+            COGNITO_CLIENT_ID: "${{ steps.stack_outputs.outputs.cognito_client_id }}",
+            COGNITO_REDIRECT_URI: "${{ vars.ADMIN_CALLBACK_URL }}",
+            COGNITO_LOGOUT_URI: "${{ vars.ADMIN_LOGOUT_URL }}",
+            ADMIN_SESSION_IDLE_MINUTES: 30,
+          };
+          EOF
+
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync frontend/ "s3://${{ steps.stack_outputs.outputs.frontend_bucket }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.stack_outputs.outputs.frontend_distribution_id }}" \
+            --paths "/*"

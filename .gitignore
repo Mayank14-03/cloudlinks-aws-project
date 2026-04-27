@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# SAM
+.aws-sam/
+samconfig.toml
+
+# Frontend local config
+frontend/config.js
+
+# OS
+.DS_Store
+Thumbs.db
+

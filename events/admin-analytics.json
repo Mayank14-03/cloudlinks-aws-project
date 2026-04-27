@@ -1,0 +1,6 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /admin/analytics",
+  "rawPath": "/admin/analytics"
+}
+
